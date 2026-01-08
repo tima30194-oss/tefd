@@ -1,0 +1,986 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Chicken Skylines 3D</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #87CEEB; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; user-select: none; -webkit-user-select: none; }
+        #game-ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+        .pointer-events-auto { pointer-events: auto; }
+        
+        /* Glass UI */
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.95);
+            border: 2px solid #e5e7eb;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+        
+        /* Start Screen */
+        #start-screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8);
+            z-index: 999;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            backdrop-filter: blur(5px);
+        }
+
+        /* Tabs & Inventory */
+        .tab-scroll {
+            display: flex;
+            overflow-x: auto;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .tab-scroll::-webkit-scrollbar { display: none; }
+
+        .tab-btn {
+            padding: 8px 12px;
+            cursor: pointer;
+            border-bottom: 3px solid transparent;
+            font-weight: bold;
+            color: #666;
+            transition: all 0.2s;
+            white-space: nowrap;
+            font-size: 14px;
+        }
+        .tab-btn.active {
+            color: #d97706; /* Amber-600 */
+            border-bottom-color: #d97706;
+            background: #fffbeb;
+        }
+        
+        .inventory-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(65px, 1fr));
+            gap: 6px;
+            max-height: 140px;
+            overflow-y: auto;
+            padding: 8px;
+        }
+
+        .build-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: white;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 4px;
+            cursor: pointer;
+            transition: all 0.1s;
+            position: relative;
+        }
+        .build-item:hover { background: #f9fafb; transform: translateY(-2px); }
+        .build-item.active { border-color: #3b82f6; background: #eff6ff; transform: scale(0.95); }
+        
+        .item-price { font-size: 10px; font-weight: bold; color: #16a34a; }
+        .item-name { font-size: 9px; text-align: center; line-height: 1.1; margin-top: 2px; color: #4b5563; }
+
+        /* Mobile Controls */
+        #mobile-controls {
+            position: absolute;
+            bottom: 220px;
+            left: 20px;
+            display: none; /* Toggled by JS */
+            z-index: 20;
+        }
+        .dpad-btn {
+            width: 50px; height: 50px;
+            background: rgba(255,255,255,0.5);
+            border: 2px solid white;
+            border-radius: 50%;
+            font-size: 24px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            touch-action: manipulation;
+        }
+        .dpad-btn:active { background: rgba(255,255,255,0.8); }
+
+        #save-indicator {
+            position: absolute; top: 10px; right: 10px;
+            background: rgba(0,0,0,0.5); color: white;
+            padding: 4px 8px; border-radius: 4px; font-size: 10px;
+            opacity: 0; transition: opacity 0.5s; pointer-events: none;
+        }
+    </style>
+    <!-- Import Map for Three.js -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <!-- Start Screen -->
+    <div id="start-screen">
+        <h1 class="text-4xl font-bold mb-8 text-yellow-400 drop-shadow-md text-center">Chicken Skylines<br><span class="text-2xl text-white">Ultimate Edition</span></h1>
+        
+        <div class="flex gap-4 mb-8">
+            <button class="bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 px-6 rounded-xl shadow-lg transform transition hover:scale-105 pointer-events-auto" onclick="startGame('pc')">
+                💻 ПК
+            </button>
+            <button class="bg-green-600 hover:bg-green-500 text-white font-bold py-4 px-6 rounded-xl shadow-lg transform transition hover:scale-105 pointer-events-auto" onclick="startGame('mobile')">
+                📱 Смартфон
+            </button>
+        </div>
+        
+        <div class="text-xs text-gray-300 max-w-md text-center">
+            Стройте ферму, ставьте Королевские замки, украшайте территорию!<br>
+            Автосохранение каждые 10 секунд.
+        </div>
+    </div>
+
+    <!-- Game Container -->
+    <div id="canvas-container" class="w-full h-full block"></div>
+
+    <!-- UI Layer -->
+    <div id="game-ui" class="flex flex-col justify-between p-2 hidden">
+        
+        <!-- Top Bar: Stats -->
+        <div class="flex justify-between items-start pointer-events-auto w-full max-w-4xl mx-auto">
+            <div class="glass-panel p-2 flex gap-3 w-full justify-between items-center">
+                <div class="text-center min-w-[60px]">
+                    <div class="text-[9px] text-gray-500 uppercase font-bold">Яйца</div>
+                    <div class="text-lg font-bold text-yellow-600">🥚 <span id="money-display">250</span></div>
+                </div>
+                <div class="text-center min-w-[70px]">
+                    <div class="text-[9px] text-gray-500 uppercase font-bold">Склад</div>
+                    <div class="text-sm font-bold text-blue-600"><span id="storage-current">0</span> / <span id="capacity-display">150</span></div>
+                </div>
+                <div class="text-center min-w-[50px]">
+                    <div class="text-[9px] text-gray-500 uppercase font-bold">Куры</div>
+                    <div class="text-lg font-bold text-gray-700">🐔 <span id="chicken-display">0</span></div>
+                </div>
+                <div class="text-center min-w-[60px]">
+                    <div class="text-[9px] text-gray-500 uppercase font-bold">Доход</div>
+                    <div class="text-lg font-bold text-green-600">+<span id="income-display">0</span>/с</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Mobile Controls (D-Pad) -->
+        <div id="mobile-controls" class="pointer-events-auto">
+            <div class="grid grid-cols-3 gap-1">
+                <div></div>
+                <div class="dpad-btn" id="btn-up">⬆️</div>
+                <div></div>
+                <div class="dpad-btn" id="btn-left">⬅️</div>
+                <div class="dpad-btn" id="btn-down">⬇️</div>
+                <div class="dpad-btn" id="btn-right">➡️</div>
+            </div>
+        </div>
+
+        <!-- Bottom Bar: Inventory System -->
+        <div class="flex justify-center mb-1 pointer-events-auto w-full">
+            <div class="glass-panel w-full max-w-2xl flex flex-col">
+                <!-- Tabs -->
+                <div class="tab-scroll" id="tabs-container">
+                    <div class="tab-btn active" onclick="switchTab('production')">🏭 Курятники</div>
+                    <div class="tab-btn" onclick="switchTab('resources')">🌾 Ресурсы</div>
+                    <div class="tab-btn" onclick="switchTab('storage')">📦 Склады</div>
+                    <div class="tab-btn" onclick="switchTab('nature')">🌲 Природа</div>
+                    <div class="tab-btn" onclick="switchTab('village')">🏘️ Декор</div>
+                </div>
+                
+                <!-- Grid Content -->
+                <div id="inventory-content" class="inventory-grid">
+                    <!-- Items injected via JS -->
+                </div>
+                
+                <!-- Footer Info -->
+                <div class="px-2 py-1 text-[10px] text-gray-400 bg-gray-50 rounded-b-lg flex justify-between items-center h-8">
+                     <span class="truncate pr-2">Инфо: <span id="selected-desc" class="font-normal text-gray-500">Выберите здание</span></span>
+                     <button onclick="selectBuilding('demolish')" class="bg-red-100 hover:bg-red-200 text-red-600 px-2 py-1 rounded text-xs font-bold transition">🚧 Снос</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="save-indicator">💾 Сохранено</div>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        // --- Configuration & Data ---
+        const config = {
+            gridSize: 200, 
+            cellSize: 2, // Small cells for high density
+            colors: {
+                grass: 0x5da64c,
+                highlight: 0xffffff,
+                error: 0xff0000
+            }
+        };
+
+        const buildingDb = {
+            // --- Production (Coops) ---
+            'coop':       { name: "Курятник", price: 50, icon: "🏠", type: 'coop', subType: 'basic', income: 1, capacity: 5, desc: "Базовый домик" },
+            'coop_big':   { name: "Большой", price: 150, icon: "🏡", type: 'coop', subType: 'big', income: 1.5, capacity: 12, desc: "Больше места и кур" },
+            'coop_mod':   { name: "Модерн", price: 250, icon: "🏢", type: 'coop', subType: 'modern', income: 2, capacity: 18, desc: "Стильный и вместительный" },
+            'coop_gold':  { name: "Золотой", price: 800, icon: "💰", type: 'coop', subType: 'gold', income: 4, capacity: 25, desc: "Элитное жилье" },
+            'coop_royal': { name: "Замок", price: 2500, icon: "🏰", type: 'coop', subType: 'royal', income: 10, capacity: 60, desc: "Королевский дворец!" },
+            
+            // --- Resources (Feeders) ---
+            'feeder':     { name: "Кормушка", price: 30, icon: "🌽", type: 'feeder', subType: 'small', desc: "Радиус 5 клеток" },
+            'trough':     { name: "Корыто", price: 70, icon: "🥖", type: 'feeder', subType: 'long', desc: "Радиус 8 клеток" },
+            'water':      { name: "Поилка", price: 100, icon: "💧", type: 'feeder', subType: 'water', desc: "Нужна всем" },
+
+            // --- Storage ---
+            'storage':    { name: "Сарай", price: 100, icon: "🏚️", type: 'storage', subType: 'basic', capacity: 150, desc: "+150 яиц" },
+            'barn':       { name: "Амбар", price: 300, icon: "🛖", type: 'storage', subType: 'barn', capacity: 500, desc: "+500 яиц" },
+            'silo':       { name: "Силос", price: 600, icon: "🏭", type: 'storage', subType: 'silo', capacity: 1200, desc: "+1200 яиц" },
+
+            // --- Nature ---
+            'tree':       { name: "Дуб", price: 15, icon: "🌳", type: 'decor', subType: 'tree' },
+            'pine':       { name: "Ель", price: 20, icon: "🌲", type: 'decor', subType: 'pine' },
+            'bush':       { name: "Куст", price: 10, icon: "🌿", type: 'decor', subType: 'bush' },
+            'flower_r':   { name: "Розы", price: 5, icon: "🌹", type: 'decor', subType: 'flower_r' },
+            'flower_y':   { name: "Тюльпан", price: 5, icon: "🌻", type: 'decor', subType: 'flower_y' },
+            'rock':       { name: "Камень", price: 8, icon: "🪨", type: 'decor', subType: 'rock' },
+
+            // --- Village ---
+            'fence':      { name: "Забор", price: 5, icon: "🪵", type: 'decor', subType: 'fence' },
+            'fence_s':    { name: "Стена", price: 10, icon: "🧱", type: 'decor', subType: 'wall' },
+            'lamp':       { name: "Фонарь", price: 25, icon: "💡", type: 'decor', subType: 'lamp' },
+            'well':       { name: "Колодец", price: 150, icon: "🕳️", type: 'decor', subType: 'well' },
+            'windmill':   { name: "Мельница", price: 500, icon: "🌬️", type: 'decor', subType: 'windmill', desc: "Вращается!" },
+            'scarecrow':  { name: "Чучело", price: 40, icon: "🎃", type: 'decor', subType: 'scarecrow' }
+        };
+
+        const categories = {
+            'production': ['coop', 'coop_big', 'coop_mod', 'coop_gold', 'coop_royal'],
+            'resources': ['feeder', 'trough', 'water'],
+            'storage': ['storage', 'barn', 'silo'],
+            'nature': ['tree', 'pine', 'bush', 'flower_r', 'flower_y', 'rock'],
+            'village': ['fence', 'fence_s', 'lamp', 'well', 'windmill', 'scarecrow']
+        };
+
+        // --- Global State ---
+        const state = {
+            money: 250,
+            maxMoney: 150, // Base
+            chickens: 0,
+            income: 0,
+            selectedTool: null, 
+            hoveredCell: null,
+            lastIncomeTime: 0,
+            isMobile: false,
+            cameraTarget: new THREE.Vector3(0, 0, 0)
+        };
+
+        // Arrays to track objects
+        let buildings = []; 
+        let chickens = [];
+        let animatedObjects = []; // For things like windmills
+
+        // --- Scene Setup ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB);
+        scene.fog = new THREE.Fog(0x87CEEB, 30, 90);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 35, 35);
+        camera.lookAt(0, 0, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.65);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(40, 60, 40);
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 2048;
+        dirLight.shadow.mapSize.height = 2048;
+        dirLight.shadow.camera.left = -80;
+        dirLight.shadow.camera.right = 80;
+        dirLight.shadow.camera.top = 80;
+        dirLight.shadow.camera.bottom = -80;
+        scene.add(dirLight);
+
+        // Ground
+        const groundGeometry = new THREE.PlaneGeometry(200, 200);
+        const groundMaterial = new THREE.MeshStandardMaterial({ color: config.colors.grass, roughness: 1 });
+        const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+        ground.rotation.x = -Math.PI / 2;
+        ground.receiveShadow = true;
+        scene.add(ground);
+
+        // Grid helper
+        const gridHelper = new THREE.GridHelper(200, 100, 0x4a853c, 0x539644); 
+        gridHelper.position.y = 0.05;
+        scene.add(gridHelper);
+
+        // Highlight Mesh
+        const highlightMesh = new THREE.Mesh(
+            new THREE.BoxGeometry(config.cellSize, 0.2, config.cellSize),
+            new THREE.MeshBasicMaterial({ color: 0xffff00, opacity: 0.5, transparent: true })
+        );
+        scene.add(highlightMesh);
+        highlightMesh.visible = false;
+
+        // --- Input Handling ---
+        const keys = { w: false, a: false, s: false, d: false, ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false };
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+
+        window.startGame = (mode) => {
+            state.isMobile = (mode === 'mobile');
+            document.getElementById('start-screen').style.display = 'none';
+            document.getElementById('game-ui').classList.remove('hidden');
+            
+            if (state.isMobile) {
+                document.getElementById('mobile-controls').style.display = 'grid';
+            }
+
+            loadGame(); 
+            switchTab('production');
+            updateStats();
+        };
+
+        // Keyboard
+        window.addEventListener('keydown', (e) => keys[e.key] = true);
+        window.addEventListener('keyup', (e) => keys[e.key] = false);
+
+        // Mouse Move
+        window.addEventListener('mousemove', (e) => {
+            mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+        });
+
+        // Click to Build
+        window.addEventListener('mousedown', (e) => {
+            if (e.target.closest('.pointer-events-auto')) return; 
+
+            if (e.button === 2) { 
+                selectBuilding(null);
+                return;
+            }
+            if (e.button === 0 && state.hoveredCell && state.selectedTool) {
+               attemptBuild(state.selectedTool, state.hoveredCell.x, state.hoveredCell.z);
+            }
+        });
+        
+        // Touch
+        window.addEventListener('touchstart', (e) => {
+             if (e.target.closest('.pointer-events-auto')) return;
+             if (e.touches.length === 1) {
+                 mouse.x = (e.touches[0].clientX / window.innerWidth) * 2 - 1;
+                 mouse.y = -(e.touches[0].clientY / window.innerHeight) * 2 + 1;
+                 raycaster.setFromCamera(mouse, camera);
+                 const intersects = raycaster.intersectObject(ground);
+                 if (intersects.length > 0 && state.selectedTool) {
+                     const p = intersects[0].point;
+                     const gridPos = getGridPos(p.x, p.z);
+                     attemptBuild(state.selectedTool, gridPos.x, gridPos.z);
+                 }
+             }
+        }, {passive: false});
+
+        window.addEventListener('contextmenu', e => e.preventDefault());
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        const setupMobileBtn = (id, key) => {
+            const btn = document.getElementById(id);
+            btn.addEventListener('touchstart', (e) => { e.preventDefault(); keys[key] = true; });
+            btn.addEventListener('touchend', (e) => { e.preventDefault(); keys[key] = false; });
+            btn.addEventListener('mousedown', (e) => { e.preventDefault(); keys[key] = true; });
+            btn.addEventListener('mouseup', (e) => { e.preventDefault(); keys[key] = false; });
+        };
+        setupMobileBtn('btn-up', 'w');
+        setupMobileBtn('btn-down', 's');
+        setupMobileBtn('btn-left', 'a');
+        setupMobileBtn('btn-right', 'd');
+
+        // --- Inventory & Logic ---
+
+        window.switchTab = (category) => {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            event.target.closest('.tab-btn').classList.add('active');
+            
+            const container = document.getElementById('inventory-content');
+            container.innerHTML = '';
+            
+            categories[category].forEach(id => {
+                const item = buildingDb[id];
+                const div = document.createElement('div');
+                div.className = 'build-item pointer-events-auto';
+                div.id = `btn-${id}`;
+                div.onclick = () => selectBuilding(id);
+                div.innerHTML = `
+                    <div class="text-2xl">${item.icon}</div>
+                    <div class="item-name">${item.name}</div>
+                    <div class="item-price">${item.price}🥚</div>
+                `;
+                container.appendChild(div);
+            });
+        };
+
+        window.selectBuilding = (id) => {
+            state.selectedTool = id;
+            document.querySelectorAll('.build-item').forEach(b => b.classList.remove('active'));
+            
+            const descEl = document.getElementById('selected-desc');
+            
+            if (id === 'demolish') {
+                descEl.innerText = "Кликните по зданию для сноса (50% возврат)";
+                descEl.style.color = "red";
+                return;
+            }
+
+            if (id) {
+                document.getElementById(`btn-${id}`)?.classList.add('active');
+                const item = buildingDb[id];
+                descEl.innerText = `${item.name}: ${item.desc || "..."}`;
+                descEl.style.color = "#4b5563";
+            } else {
+                descEl.innerText = "Выберите здание";
+            }
+        };
+
+        function getGridPos(x, z) {
+            const cs = config.cellSize;
+            return {
+                x: Math.round(x / cs) * cs,
+                z: Math.round(z / cs) * cs
+            };
+        }
+
+        function isOccupied(gx, gz) {
+            return buildings.some(b => Math.abs(b.x - gx) < 0.1 && Math.abs(b.z - gz) < 0.1);
+        }
+
+        function attemptBuild(id, gx, gz) {
+            const occupied = isOccupied(gx, gz);
+            
+            if (id === 'demolish') {
+                if (occupied) {
+                    const idx = buildings.findIndex(b => Math.abs(b.x - gx) < 0.1 && Math.abs(b.z - gz) < 0.1);
+                    const building = buildings[idx];
+                    
+                    const typeId = building.typeId;
+                    if (buildingDb[typeId]) {
+                        updateMoney(Math.floor(buildingDb[typeId].price / 2));
+                    }
+                    
+                    scene.remove(building.mesh);
+                    if (building.animObj) {
+                        const animIdx = animatedObjects.indexOf(building.animObj);
+                        if(animIdx > -1) animatedObjects.splice(animIdx, 1);
+                    }
+
+                    buildings.splice(idx, 1);
+                    recalculateStats();
+                    saveGame();
+                }
+                return;
+            }
+
+            if (occupied) return; 
+
+            const item = buildingDb[id];
+            if (state.money >= item.price) {
+                updateMoney(-item.price);
+                createBuilding(id, gx, gz);
+                saveGame();
+            } else {
+                const el = document.getElementById('money-display');
+                el.style.color = 'red';
+                setTimeout(() => updateStats(), 200);
+            }
+        }
+
+        // Geometry Helpers
+        const geoCache = {};
+        const matCache = {};
+        function getMat(color) {
+            if (!matCache[color]) matCache[color] = new THREE.MeshStandardMaterial({ color });
+            return matCache[color];
+        }
+        function makeBox(w, h, d, color, y) {
+            const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), getMat(color));
+            m.position.y = y; m.castShadow = true; return m;
+        }
+
+        function createBuilding(id, x, z, loadData = null) {
+            const item = buildingDb[id];
+            let buildingData = loadData || {};
+            const group = new THREE.Group();
+            let animObj = null;
+
+            // --- Building Generation Logic ---
+            if (item.type === 'coop') {
+                if (item.subType === 'royal') {
+                    // Castle
+                    const base = makeBox(2.2, 1.5, 2.2, 0x555555, 0.75);
+                    group.add(base);
+                    const keep = makeBox(1.2, 2.5, 1.2, 0x666666, 1.25);
+                    group.add(keep);
+                    
+                    // Towers
+                    const towerGeo = new THREE.CylinderGeometry(0.4, 0.4, 3);
+                    const coneGeo = new THREE.ConeGeometry(0.5, 0.8, 8);
+                    const towerMat = getMat(0x444444);
+                    const roofMat = getMat(0x8B0000);
+                    
+                    [[-1.1, -1.1], [1.1, -1.1], [-1.1, 1.1], [1.1, 1.1]].forEach(pos => {
+                        const t = new THREE.Mesh(towerGeo, towerMat);
+                        t.position.set(pos[0], 1.5, pos[1]);
+                        group.add(t);
+                        const r = new THREE.Mesh(coneGeo, roofMat);
+                        r.position.set(pos[0], 3.4, pos[1]);
+                        group.add(r);
+                    });
+                    
+                    // Flag
+                    const pole = makeBox(0.05, 1, 0.05, 0x888888, 4);
+                    group.add(pole);
+                    const flag = makeBox(0.6, 0.4, 0.05, 0xFFD700, 4.2);
+                    flag.position.x = 0.3;
+                    group.add(flag);
+
+                } else if (item.subType === 'big') {
+                    // Big Barn Style
+                    const body = makeBox(2.2, 1.8, 2.2, 0xA0522D, 0.9);
+                    group.add(body);
+                    const roof = new THREE.Mesh(new THREE.ConeGeometry(2.0, 1.2, 4), getMat(0x4a3c31));
+                    roof.position.y = 2.4; roof.rotation.y = Math.PI/4;
+                    group.add(roof);
+                    group.add(makeBox(0.8, 1.2, 0.1, 0x000000, 0.6)); // Door
+
+                } else if (item.subType === 'modern') {
+                    // Concrete/Glass
+                    group.add(makeBox(1.8, 1.2, 1.8, 0xcccccc, 0.6));
+                    group.add(makeBox(1.4, 1.2, 1.4, 0x88ccff, 1.8)); // Glass top
+                    group.add(makeBox(1.5, 0.1, 1.5, 0x666666, 2.4)); // Roof
+
+                } else {
+                    // Standard / Gold
+                    const color = item.subType === 'gold' ? 0xFFD700 : 0xA52A2A;
+                    const roofColor = item.subType === 'gold' ? 0xDAA520 : 0x8B4513;
+                    group.add(makeBox(1.4, 1.2, 1.4, color, 0.6));
+                    const roof = new THREE.Mesh(new THREE.ConeGeometry(1.2, 1.0, 4), getMat(roofColor));
+                    roof.position.y = 1.7; roof.rotation.y = Math.PI/4;
+                    group.add(roof);
+                    group.add(makeBox(0.5, 0.8, 0.1, 0x330000, 0.4)); // Door
+                }
+
+                if (!loadData) buildingData = { lastSpawn: 0 };
+            } 
+            else if (item.type === 'feeder') {
+                if (item.subType === 'water') {
+                     group.add(makeBox(1.4, 0.2, 1.4, 0x888888, 0.1));
+                     group.add(makeBox(1.2, 0.1, 1.2, 0x00BFFF, 0.2));
+                } else if (item.subType === 'long') {
+                    group.add(makeBox(1.8, 0.3, 0.6, 0x5c4033, 0.15));
+                    group.add(makeBox(1.7, 0.15, 0.5, 0xffcc00, 0.25));
+                } else {
+                    group.add(makeBox(1.0, 0.3, 1.0, 0x888888, 0.15));
+                    group.add(makeBox(0.9, 0.15, 0.9, 0xffcc00, 0.25));
+                }
+            }
+            else if (item.type === 'storage') {
+                if (item.subType === 'silo') {
+                    const cyl = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 2.5), getMat(0xc0c0c0));
+                    cyl.position.y = 1.25; group.add(cyl);
+                    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.8), getMat(0xc0c0c0));
+                    cap.position.y = 2.5; group.add(cap);
+                } else if (item.subType === 'barn') {
+                    group.add(makeBox(1.8, 1.5, 1.8, 0x8B0000, 0.75));
+                    const roof = new THREE.Mesh(new THREE.CylinderGeometry(0, 1.4, 1, 4), getMat(0x333333));
+                    roof.rotation.y = Math.PI/4; roof.position.y = 1.9; group.add(roof);
+                } else {
+                    group.add(makeBox(1.5, 1.2, 1.5, 0x8B4513, 0.6));
+                }
+            }
+            else if (item.type === 'decor') {
+                if (item.subType === 'windmill') {
+                    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.7, 2.5), getMat(0xffffff));
+                    base.position.y = 1.25; group.add(base);
+                    const roof = new THREE.Mesh(new THREE.ConeGeometry(0.6, 0.8), getMat(0x8B0000));
+                    roof.position.y = 2.9; group.add(roof);
+                    
+                    const blades = new THREE.Group();
+                    const b1 = makeBox(3, 0.1, 0.1, 0x333333, 0);
+                    const b2 = makeBox(0.1, 3, 0.1, 0x333333, 0);
+                    blades.add(b1); blades.add(b2);
+                    blades.position.set(0, 2.5, 0.5);
+                    group.add(blades);
+                    
+                    animObj = { mesh: blades, type: 'rotate_z', speed: 1.5 };
+                }
+                else if (item.subType === 'well') {
+                    const wall = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, 0.6, 8, 1, true), getMat(0x888888));
+                    wall.position.y = 0.3; group.add(wall);
+                    const roof = new THREE.Mesh(new THREE.ConeGeometry(0.8, 0.5, 4), getMat(0x5c4033));
+                    roof.position.y = 1.5; group.add(roof);
+                    group.add(makeBox(0.1, 1.0, 0.1, 0x5c4033, 0.8)); // post
+                }
+                else if (item.subType === 'pine') {
+                    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.15, 0.8), getMat(0x5c4033));
+                    trunk.position.y = 0.4; group.add(trunk);
+                    const leaves = new THREE.Mesh(new THREE.ConeGeometry(0.6, 1.5, 6), getMat(0x1a4d1a));
+                    leaves.position.y = 1.2; group.add(leaves);
+                }
+                else if (item.subType === 'flower_r' || item.subType === 'flower_y') {
+                    const col = item.subType === 'flower_r' ? 0xff0000 : 0xffff00;
+                    for(let i=0; i<5; i++) {
+                        const f = new THREE.Mesh(new THREE.DodecahedronGeometry(0.15), getMat(col));
+                        f.position.set((Math.random()-0.5), 0.2, (Math.random()-0.5));
+                        group.add(f);
+                        const s = makeBox(0.05, 0.2, 0.05, 0x00ff00, 0.1);
+                        s.position.x = f.position.x; s.position.z = f.position.z;
+                        group.add(s);
+                    }
+                }
+                else if (item.subType === 'rock') {
+                    const r = new THREE.Mesh(new THREE.DodecahedronGeometry(0.5), getMat(0x777777));
+                    r.scale.y = 0.6; r.position.y = 0.3;
+                    group.add(r);
+                }
+                else if (item.subType === 'lamp') {
+                    group.add(makeBox(0.1, 1.5, 0.1, 0x222222, 0.75));
+                    const l = makeBox(0.3, 0.3, 0.3, 0xffffe0, 1.5);
+                    group.add(l);
+                    // Point light
+                    const pl = new THREE.PointLight(0xffaa00, 0.5, 5);
+                    pl.position.set(0, 1.5, 0);
+                    group.add(pl);
+                }
+                else if (item.subType === 'fence') {
+                    group.add(makeBox(2, 0.4, 0.1, 0x8B4513, 0.4));
+                    group.add(makeBox(0.2, 0.6, 0.2, 0x5c4033, 0.3)); // post
+                }
+                else if (item.subType === 'wall') {
+                    group.add(makeBox(2, 0.6, 0.4, 0x777777, 0.3));
+                }
+                else if (item.subType === 'bush') {
+                     const b = new THREE.Mesh(new THREE.DodecahedronGeometry(0.5), getMat(0x228b22));
+                     b.position.y = 0.4; group.add(b);
+                }
+                else {
+                    // Default tree
+                    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.25, 1), getMat(0x5c4033));
+                    trunk.position.y = 0.5; group.add(trunk);
+                    const leaves = new THREE.Mesh(new THREE.DodecahedronGeometry(0.7), getMat(0x228b22));
+                    leaves.position.y = 1.2; group.add(leaves);
+                }
+            }
+
+            if (group) {
+                group.position.set(x, 0, z);
+                // Animation
+                if (!loadData) {
+                    group.scale.set(0,0,0);
+                    group.userData.targetScale = 1;
+                }
+                
+                scene.add(group);
+                buildings.push({ type: item.type, typeId: id, mesh: group, x, z, data: buildingData, animObj });
+                if (animObj) animatedObjects.push(animObj);
+                
+                if (item.type === 'coop' && !loadData) {
+                    spawnChicken(x, z);
+                }
+                
+                recalculateStats();
+            }
+        }
+
+        function spawnChicken(originX, originZ) {
+            const group = new THREE.Group();
+            const scale = 0.4; 
+            
+            // Body
+            const body = new THREE.Mesh(new THREE.BoxGeometry(0.6*scale, 0.6*scale, 0.6*scale), getMat(0xffffff));
+            body.position.y = 0.3*scale; group.add(body);
+            // Beak
+            const beak = new THREE.Mesh(new THREE.ConeGeometry(0.1*scale, 0.2*scale, 4), getMat(0xffaa00));
+            beak.rotation.x = Math.PI / 2; beak.position.set(0, 0.5*scale, 0.3*scale); group.add(beak);
+            // Comb
+            const comb = new THREE.Mesh(new THREE.BoxGeometry(0.2*scale, 0.2*scale, 0.2*scale), getMat(0xff0000));
+            comb.position.set(0, 0.7*scale, 0); group.add(comb);
+
+            group.position.set(originX, 0, originZ);
+            scene.add(group);
+
+            chickens.push({
+                mesh: group,
+                targetX: originX + (Math.random() - 0.5) * 5,
+                targetZ: originZ + (Math.random() - 0.5) * 5,
+                idleTimer: 0,
+                speed: (0.8 + Math.random() * 0.5)
+            });
+            updateStats();
+        }
+
+        function updateMoney(amount) {
+            state.money += amount;
+            if (amount > 0 && state.money > state.maxMoney) {
+                state.money = state.maxMoney;
+            }
+            updateStats();
+        }
+        
+        function recalculateStats() {
+            // Storage
+            const storageBuilds = buildings.filter(b => b.type === 'storage');
+            let capacity = 150; // Base
+            storageBuilds.forEach(b => {
+                capacity += (buildingDb[b.typeId].capacity || 0);
+            });
+            state.maxMoney = capacity;
+
+            // Income
+            // Count chickens
+            // Logic: Base income is based on # of chickens + Happiness
+            // Simple logic: Each chicken gives 0.05/sec.
+            // Feeders boost this.
+            
+            const feeders = buildings.filter(b => b.type === 'feeder');
+            const boostMult = 1 + (feeders.length * 0.2); // 20% boost per feeder roughly
+            
+            // Coops determine spawn speed, not income directly, but chickens generate income
+            const baseRate = 0.1; 
+            state.income = parseFloat((chickens.length * baseRate * boostMult).toFixed(1));
+
+            updateStats();
+        }
+
+        function updateStats() {
+            document.getElementById('money-display').innerText = Math.floor(state.money);
+            document.getElementById('capacity-display').innerText = state.maxMoney;
+            document.getElementById('storage-current').innerText = Math.floor(state.money);
+            document.getElementById('chicken-display').innerText = chickens.length;
+            document.getElementById('income-display').innerText = state.income;
+            
+            const moneyDisplay = document.getElementById('money-display');
+            if (state.money >= state.maxMoney) {
+                moneyDisplay.classList.add('text-red-600');
+                moneyDisplay.classList.remove('text-yellow-600');
+            } else {
+                moneyDisplay.classList.add('text-yellow-600');
+                moneyDisplay.classList.remove('text-red-600');
+            }
+        }
+
+        // --- Save System ---
+        function saveGame() {
+            const data = {
+                money: state.money,
+                buildings: buildings.map(b => ({
+                    typeId: b.typeId,
+                    x: b.x, 
+                    z: b.z,
+                    data: b.data
+                })),
+                chickensCount: chickens.length
+            };
+            localStorage.setItem('chickenSkylinesUltimate', JSON.stringify(data));
+            
+            const ind = document.getElementById('save-indicator');
+            ind.style.opacity = 1;
+            setTimeout(() => ind.style.opacity = 0, 1000);
+        }
+
+        function loadGame() {
+            const raw = localStorage.getItem('chickenSkylinesUltimate');
+            if (!raw) {
+                // Initial New Game Setup
+                state.money = 250;
+                return;
+            }
+            
+            try {
+                const data = JSON.parse(raw);
+                state.money = data.money || 250;
+                
+                buildings.forEach(b => scene.remove(b.mesh));
+                buildings = [];
+                chickens.forEach(c => scene.remove(c.mesh));
+                chickens = [];
+                animatedObjects = [];
+
+                if (data.buildings) {
+                    data.buildings.forEach(b => {
+                        createBuilding(b.typeId, b.x, b.z, b.data);
+                    });
+                }
+                
+                const coops = buildings.filter(b => b.type === 'coop');
+                if (coops.length > 0) {
+                    const toSpawn = data.chickensCount || 0;
+                    for(let i=0; i<toSpawn; i++) {
+                        const host = coops[i % coops.length];
+                        spawnChicken(host.x, host.z);
+                    }
+                }
+
+                recalculateStats();
+            } catch (e) {
+                console.error("Save load failed", e);
+            }
+        }
+
+        setInterval(saveGame, 10000); 
+
+        // --- Game Loop ---
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+            const now = Date.now();
+
+            // Camera
+            const moveSpeed = 30 * delta;
+            const forward = new THREE.Vector3(); camera.getWorldDirection(forward); forward.y = 0; forward.normalize();
+            const right = new THREE.Vector3(); right.crossVectors(forward, camera.up).normalize();
+
+            if (keys.w || keys.ArrowUp) camera.position.addScaledVector(forward, moveSpeed);
+            if (keys.s || keys.ArrowDown) camera.position.addScaledVector(forward, -moveSpeed);
+            if (keys.a || keys.ArrowLeft) camera.position.addScaledVector(right, -moveSpeed);
+            if (keys.d || keys.ArrowRight) camera.position.addScaledVector(right, moveSpeed);
+            
+            camera.position.x = THREE.MathUtils.clamp(camera.position.x, -100, 100);
+            camera.position.z = THREE.MathUtils.clamp(camera.position.z, -100, 100);
+
+            // Raycasting
+            if (!state.isMobile || mouse.x !== 0) { 
+                raycaster.setFromCamera(mouse, camera);
+                const intersects = raycaster.intersectObject(ground);
+                if (intersects.length > 0 && state.selectedTool) {
+                    const gridPos = getGridPos(intersects[0].point.x, intersects[0].point.z);
+                    state.hoveredCell = gridPos;
+                    highlightMesh.position.set(gridPos.x, 0.1, gridPos.z);
+                    highlightMesh.visible = true;
+                    
+                    const occupied = isOccupied(gridPos.x, gridPos.z);
+                    if (state.selectedTool === 'demolish') highlightMesh.material.color.setHex(occupied ? 0xff0000 : 0xaaaaaa);
+                    else highlightMesh.material.color.setHex(occupied ? 0xff0000 : 0x00ff00);
+                } else {
+                    highlightMesh.visible = false;
+                    state.hoveredCell = null;
+                }
+            }
+
+            // Animations
+            buildings.forEach(b => {
+                // Scale in
+                if (b.mesh.userData.targetScale) {
+                    if (b.mesh.scale.x < 1) {
+                        const s = delta * 4;
+                        b.mesh.scale.addScalar(s);
+                        if (b.mesh.scale.x > 1) b.mesh.scale.set(1,1,1);
+                    }
+                }
+                
+                // Spawning
+                if (b.type === 'coop') {
+                    const stats = buildingDb[b.typeId];
+                    const spawnRate = 8000 / (stats.income || 1); // faster spawn for better coops
+                    const capacity = stats.capacity || 5;
+
+                    // Local density check (approximate)
+                    if (now - b.data.lastSpawn > spawnRate) {
+                         if (chickens.length < buildings.filter(x=>x.type==='coop').reduce((acc, val) => acc + (buildingDb[val.typeId].capacity||5), 0)) {
+                             spawnChicken(b.x, b.z);
+                             b.data.lastSpawn = now;
+                         }
+                    }
+                }
+            });
+
+            // Special Object Animations
+            animatedObjects.forEach(obj => {
+                if (obj.type === 'rotate_z') {
+                    obj.mesh.rotation.z -= delta * obj.speed;
+                }
+            });
+
+            // Chicken AI
+            chickens.forEach(chicken => {
+                const mesh = chicken.mesh;
+                const dx = chicken.targetX - mesh.position.x;
+                const dz = chicken.targetZ - mesh.position.z;
+                const dist = Math.sqrt(dx*dx + dz*dz);
+
+                if (dist < 0.2) {
+                    if (chicken.idleTimer <= 0) {
+                        chicken.idleTimer = Math.random() * 2 + 1;
+                    } else {
+                        chicken.idleTimer -= delta;
+                        if (chicken.idleTimer <= 0) {
+                            const feeders = buildings.filter(b => b.type === 'feeder');
+                            // 40% chance to go to feeder
+                            if (feeders.length > 0 && Math.random() < 0.4) {
+                                const f = feeders[Math.floor(Math.random() * feeders.length)];
+                                chicken.targetX = f.x + (Math.random()-0.5)*1.5;
+                                chicken.targetZ = f.z + (Math.random()-0.5)*1.5;
+                            } else {
+                                chicken.targetX = mesh.position.x + (Math.random()-0.5) * 6;
+                                chicken.targetZ = mesh.position.z + (Math.random()-0.5) * 6;
+                            }
+                            mesh.lookAt(chicken.targetX, mesh.position.y, chicken.targetZ);
+                        }
+                    }
+                    if (chicken.idleTimer > 0) mesh.position.y = Math.abs(Math.sin(now * 0.005)) * 0.2;
+                } else {
+                    const moveStep = chicken.speed * delta;
+                    mesh.position.x += (dx / dist) * moveStep;
+                    mesh.position.z += (dz / dist) * moveStep;
+                    mesh.position.y = Math.abs(Math.sin(now * 0.01)) * 0.5;
+                }
+            });
+
+            // Economy
+            if (now - state.lastIncomeTime > 1000) {
+                if (state.income > 0 && state.money < state.maxMoney) {
+                    updateMoney(state.income);
+                    
+                    if (Math.random() > 0.7) { // Don't spam floats
+                        const floatDiv = document.createElement('div');
+                        floatDiv.innerText = "+" + Math.floor(state.income);
+                        floatDiv.style.position = 'absolute'; floatDiv.style.left = '50%'; floatDiv.style.top = '10%';
+                        floatDiv.style.color = 'lightgreen'; floatDiv.style.fontWeight = 'bold'; floatDiv.style.fontSize = '20px';
+                        floatDiv.style.pointerEvents = 'none'; floatDiv.style.transition = 'all 1s ease-out';
+                        document.body.appendChild(floatDiv);
+                        setTimeout(() => { floatDiv.style.top = '5%'; floatDiv.style.opacity = '0'; }, 50);
+                        setTimeout(() => floatDiv.remove(), 1000);
+                    }
+                }
+                state.lastIncomeTime = now;
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+    </script>
+</body>
+</html>
